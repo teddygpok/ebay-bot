@@ -1,0 +1,38 @@
+name: eBay Rayquaza Bot
+
+on:
+  schedule:
+    - cron: '30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore seen_ids cache
+        uses: actions/cache/restore@v4
+        with:
+          path: seen_ids.json
+          key: seen-ids-${{ github.run_id }}
+          restore-keys: seen-ids-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - run: python main.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        timeout-minutes: 55
+
+      - name: Save seen_ids cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen_ids.json
+          key: seen-ids-${{ github.run_id }}
