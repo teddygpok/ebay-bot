@@ -39,11 +39,11 @@ def get_token():
                 "Authorization": f"Basic {credentials}",
                 "Content-Type": "application/x-www-form-urlencoded",
             },
-            data="grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+            data="grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope",
             timeout=10,
         )
         logging.info(f"Status eBay : {r.status_code}")
-        logging.info(f"Réponse eBay : {r.text[:200]}")
+        logging.info(f"Réponse eBay : {r.text[:300]}")
         return r.json().get("access_token")
     except Exception as e:
         logging.error(f"Erreur token : {e}")
