@@ -32,16 +32,22 @@ PATTERNS = [
 
 def get_token():
     credentials = base64.b64encode(f"{EBAY_APP_ID}:{EBAY_CERT_ID}".encode()).decode()
-    r = requests.post(
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        headers={
-            "Authorization": f"Basic {credentials}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data="grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
-        timeout=10,
-    )
-    return r.json().get("access_token")
+    try:
+        r = requests.post(
+            "https://api.ebay.com/identity/v1/oauth2/token",
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data="grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+            timeout=10,
+        )
+        logging.info(f"Status eBay : {r.status_code}")
+        logging.info(f"Réponse eBay : {r.text[:200]}")
+        return r.json().get("access_token")
+    except Exception as e:
+        logging.error(f"Erreur token : {e}")
+        return None
 
 def is_valid(title):
     t = title.lower()
