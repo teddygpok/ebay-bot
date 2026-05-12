@@ -1,24 +1,12 @@
-import os, time, requests, logging, re
-from bs4 import BeautifulSoup
+import os, time, requests, logging, re, base64
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
+EBAY_CERT_ID = os.environ.get("EBAY_CERT_ID")
 CHECK_INTERVAL = 120
-
-EBAY_URL = "https://www.ebay.fr/sch/i.html"
-PARAMS = {
-    "LH_ItemCondition": "",
-    "LH_Time": "1",
-    "_nkw": "rayquaza",
-    "_sop": "10",
-}
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-    "Accept-Language": "fr-FR,fr;q=0.9",
-    "Accept": "text/html,application/xhtml+xml",
-}
 
 PATTERNS = [
     r"\bdp\s*47\b",
@@ -28,7 +16,32 @@ PATTERNS = [
     r"\b97\b",
     r"\b0?39\b",
     r"\b107\b",
+    r"\b0{0,2}3\b",
+    r"\b218\b",
+    r"\b87\b",
+    r"\b105\b",
+    r"\b64\b",
+    r"\b69\b",
+    r"\b128\b",
+    r"\b10\b",
+    r"\bsl\b",
+    r"\b16\b",
+    r"\b26\b",
+    r"\b9\b",
 ]
+
+def get_token():
+    credentials = base64.b64encode(f"{EBAY_APP_ID}:{EBAY_CERT_ID}".encode()).decode()
+    r = requests.post(
+        "https://api.ebay.com/identity/v1/oauth2/token",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        data="grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+        timeout=10,
+    )
+    return r.json().get("access_token")
 
 def is_valid(title):
     t = title.lower()
@@ -36,39 +49,32 @@ def is_valid(title):
         return False
     return any(re.search(p, t) for p in PATTERNS)
 
-def fetch_items():
+def fetch_items(token):
     try:
-        r = requests.get(EBAY_URL, params=PARAMS, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = []
-        for listing in soup.select(".s-item"):
-            title_el = listing.select_one(".s-item__title")
-            price_el = listing.select_one(".s-item__price")
-            link_el = listing.select_one("a.s-item__link")
-            img_el = listing.select_one(".s-item__image-img")
-            if not title_el or not link_el:
-                continue
-            title = title_el.text.strip()
-            if title == "Shop on eBay":
-                continue
-            items.append({
-                "id": link_el["href"].split("?")[0],
-                "title": title,
-                "price": price_el.text.strip() if price_el else "?",
-                "url": link_el["href"].split("?")[0],
-                "photo": img_el["src"] if img_el else None,
-            })
-        return items
+        r = requests.get(
+            "https://api.ebay.com/buy/browse/v1/item_summary/search",
+            headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_FR"},
+            params={"q": "rayquaza carte", "sort": "newlyListed", "limit": 20},
+            timeout=15,
+        )
+        data = r.json()
+        return data.get("itemSummaries", [])
     except Exception as e:
         logging.error(f"Erreur fetch : {e}")
         return []
 
 def notify(item):
-    text = f"{item['title']}\nPrix : {item['price']}\n\n{item['url']}"
-    if item.get("photo"):
+    title = item.get("title", "?")
+    price = item.get("price", {}).get("value", "?")
+    currency = item.get("price", {}).get("currency", "EUR")
+    url = item.get("itemWebUrl", "?")
+    photo = item.get("image", {}).get("imageUrl", None)
+    text = f"{title}\nPrix : {price} {currency}\n\n{url}"
+
+    if photo:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-            json={"chat_id": TELEGRAM_CHAT_ID, "photo": item["photo"], "caption": text},
+            json={"chat_id": TELEGRAM_CHAT_ID, "photo": photo, "caption": text},
             timeout=10
         )
     else:
@@ -80,29 +86,34 @@ def notify(item):
 
 def main():
     logging.info("Bot eBay démarré !")
+    token = get_token()
+    if not token:
+        logging.error("Impossible d'obtenir le token eBay !")
+        return
+
     notified = set()
     first_run = True
 
     while True:
-        items = fetch_items()
+        items = fetch_items(token)
         if not items:
             logging.info("Aucun article ou erreur.")
             time.sleep(300)
             continue
 
-        valid = [i for i in items if is_valid(i["title"])]
+        valid = [i for i in items if is_valid(i.get("title", ""))]
 
         if first_run:
             for i in valid:
-                notified.add(i["id"])
+                notified.add(i["itemId"])
             first_run = False
             logging.info(f"{len(notified)} annonces existantes ignorées.")
         else:
             for item in valid:
-                if item["id"] not in notified:
+                if item["itemId"] not in notified:
                     notify(item)
-                    notified.add(item["id"])
-                    logging.info(f"Notifié : {item['title']}")
+                    notified.add(item["itemId"])
+                    logging.info(f"Notifié : {item.get('title')}")
 
         time.sleep(CHECK_INTERVAL)
 
