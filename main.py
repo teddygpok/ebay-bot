@@ -1,5 +1,5 @@
 import os, time, requests, logging, re
-from xml.etree import ElementTree
+from xml.etree import ElementTree as ET
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -9,14 +9,17 @@ EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 CHECK_INTERVAL = 120
 
 PATTERNS = [
-    r"\bdp\s*47\b", r"\b0?18\b", r"\b232\b", r"\b102\b",
-    r"\b97\b", r"\b0?39\b", r"\b107\b", r"\b0{0,2}3\b",
-    r"\b218\b", r"\b87\b", r"\b105\b", r"\b64\b",
-    r"\b69\b", r"\b128\b", r"\b10\b", r"\bsl\b",
-    r"\b16\b", r"\b26\b", r"\b9\b",
+    "dp 47", "dp47", "018", "18/", "232", "102", "097", "97/",
+    "039", "39/", "107", "003", "03/", "3/", "218", "087", "87/",
+    "105", "064", "64/", "069", "69/", "128", "010", "10/", "sl",
+    "016", "16/", "026", "26/", "009", "9/"
 ]
 
-NS = "http://www.ebay.com/marketplace/search/v1/services"
+def is_valid(title):
+    t = title.lower()
+    if "rayquaza" not in t:
+        return False
+    return any(p in t for p in PATTERNS)
 
 def fetch_items():
     try:
@@ -27,64 +30,38 @@ def fetch_items():
                 "SERVICE-VERSION": "1.0.0",
                 "SECURITY-APPNAME": EBAY_APP_ID,
                 "RESPONSE-DATA-FORMAT": "XML",
-                "REST-PAYLOAD": "",
                 "keywords": "rayquaza carte pokemon",
                 "paginationInput.entriesPerPage": "20",
                 "sortOrder": "StartTimeNewest",
-                "itemFilter(0).name": "ListingType",
-                "itemFilter(0).value": "FixedPrice",
             },
             timeout=15,
         )
-        root = ElementTree.fromstring(r.content)
+        logging.info(f"eBay status: {r.status_code}")
+        root = ET.fromstring(r.content)
+        ns = "http://www.ebay.com/marketplace/search/v1/services"
         items = []
-        for item in root.iter(f"{{{NS}}}item"):
-            title = item.findtext(f"{{{NS}}}title", "")
-            price_el = item.find(f".//{{{NS}}}currentPrice")
+        for item in root.iter(f"{{{ns}}}item"):
+            title = item.findtext(f"{{{ns}}}title", "")
+            price_el = item.find(f".//{{{ns}}}currentPrice")
             price = price_el.text if price_el is not None else "?"
-            currency = price_el.get("currencyId", "EUR") if price_el is not None else "EUR"
-            url = item.findtext(f"{{{NS}}}viewItemURL", "")
-            item_id = item.findtext(f"{{{NS}}}itemId", "")
-            photo = item.findtext(f"{{{NS}}}galleryURL", "")
-            items.append({
-                "id": item_id,
-                "title": title,
-                "price": price,
-                "currency": currency,
-                "url": url,
-                "photo": photo,
-            })
+            url = item.findtext(f"{{{ns}}}viewItemURL", "")
+            item_id = item.findtext(f"{{{ns}}}itemId", "")
+            photo = item.findtext(f"{{{ns}}}galleryURL", "")
+            items.append({"id": item_id, "title": title, "price": price, "url": url, "photo": photo})
+        logging.info(f"{len(items)} articles trouvés")
         return items
     except Exception as e:
-        logging.error(f"Erreur fetch : {e}")
+        logging.error(f"Erreur: {e}")
         return []
 
-def is_valid(item):
-    title = item.get("title", "").lower()
-    if "rayquaza" not in title:
-        return False
-    return any(re.search(p, title) for p in PATTERNS)
-
 def notify(item):
-    title = item.get("title", "?")
-    price = item.get("price", "?")
-    currency = item.get("currency", "EUR")
-    url = item.get("url", "")
-    photo = item.get("photo", "")
-    text = f"{title}\nPrix : {price} {currency}\n\n{url}"
-
-    if photo:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-            json={"chat_id": TELEGRAM_CHAT_ID, "photo": photo, "caption": text},
-            timeout=10
-        )
+    text = f"{item['title']}\nPrix : {item['price']} EUR\n\n{item['url']}"
+    if item.get("photo"):
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            json={"chat_id": TELEGRAM_CHAT_ID, "photo": item["photo"], "caption": text}, timeout=10)
     else:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
-            timeout=10
-        )
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=10)
 
 def main():
     logging.info("Bot eBay démarré !")
@@ -93,7 +70,20 @@ def main():
 
     while True:
         items = fetch_items()
-        if not items:
-            logging.info("Aucun article ou erreur.")
-            time.sleep(300)
-            continue
+        valid = [i for i in items if is_valid(i["title"])]
+
+        if first_run:
+            for i in valid:
+                notified.add(i["id"])
+            first_run = False
+            logging.info(f"{len(notified)} annonces existantes ignorées.")
+        else:
+            for item in valid:
+                if item["id"] not in notified:
+                    notify(item)
+                    notified.add(item["id"])
+                    logging.info(f"Notifié : {item['title']}")
+
+        time.sleep(CHECK_INTERVAL)
+
+main()
